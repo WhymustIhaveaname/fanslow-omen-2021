@@ -1,0 +1,43 @@
+#!/bin/bash
+
+setreg()
+{
+    probook_ec := $1 $2
+}
+
+readreg()
+{
+    regv=$(probook_ec ?= $1 | cut --delimiter " " --fields 3)
+    #echo $1 == $regv
+    return $(printf "%d" $regv)
+}
+
+cputemp_target=39 #39 is critical
+gputemp_target=55
+counter=0
+
+while true
+do
+    readreg 0x48
+    cputemp=$?
+    if (( $cputemp != $cputemp_target )); then
+        setreg 0x48 $(printf %x $cputemp_target) 
+    fi
+    readreg 0xb7
+    gputemp=$?
+    if (( $gputemp != $gputemp_target )); then
+        setreg 0xb7 $(printf %x $gputemp_target)
+    fi
+
+    if (( $counter <= 0 )); then
+        readreg 0x2e
+        cpufan=$?
+        readreg 0x2f
+        gpufan=$?
+        printf "fans: %d %d; temps: %d %d\n" $cpufan $gpufan $cputemp $gputemp
+	      counter=60
+    fi
+    
+    counter=$counter-1
+    sleep 0.5
+done
