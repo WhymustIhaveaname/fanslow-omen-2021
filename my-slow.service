@@ -1,0 +1,12 @@
+# copy it to /etc/systemd/system/my-slow.service
+[Unit]
+Description=Make it quiter
+After=network.target
+
+[Service]
+ExecStart=/root/fanslow-omen-2021/omenslow.py
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
