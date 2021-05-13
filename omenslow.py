@@ -30,7 +30,7 @@ def log(msg,l=1,end="\n",logfile=LOGFILE,color=None):
             f.write(tempstr)
 
 import os
-from multiprocessing import Process
+from multiprocessing import Process,Value
 
 def read_val(addr):
     with os.popen('probook_ec ?= %s'%(addr)) as f:
@@ -39,21 +39,31 @@ def read_val(addr):
     return int(t,16)
 
 def write_val(addr,val):
+    #log('probook_ec := %s %x'%(addr,val))
     os.system('probook_ec := %s %x'%(addr,val))
+    #log(read_val(addr))
 
-check_pts=(0.6,0.8,1.0)
+check_pts=(0.6,0.94,1.0) #0.2/3.8=0.053
+boost_flag=Value("i",0)
 
 def coolen_device(addr,interval,t_target,t_boost):
-    log("into %s"%(addr))
+    interval_log="%s.interval"%(addr)
     last_check=time.time()
+    last_ck_cache=last_check
     check_ct=len(check_pts)
 
     while True:
         t=read_val(addr)
-        if t!= t_target:
-            log("%s changed to %d, past %.2fs"%(addr,t,time.time()-last_check))
+        if t!=t_target:
             last_check=time.time()
-            write_val(addr,t_target)
+            #log("%s changed to %d, past %.2fs"%(addr,t,last_check-last_ck_cache))
+            #log("%.3f"%(last_check-last_ck_cache),logfile=interval_log,end=", ")
+            last_ck_cache=last_check
+            if boost_flag.value<=0:
+                write_val(addr,t_target)
+            else:
+                log("found boost_flag set",l=2)
+                write_val(addr,t_boost)
             check_ct=0
         else:
             check_ct+=1
@@ -61,32 +71,44 @@ def coolen_device(addr,interval,t_target,t_boost):
         if check_ct<len(check_pts):
             this_interval=interval*check_pts[check_ct]
             time_past=(time.time()-last_check)
-            if this_interval>time_past:
-                time.sleep(this_interval-time_past)
-            else:
-                log("this_inertval<time_past: %d<%d?"%(this_interval,time_past),l=2)
+            time.sleep(max(this_interval-time_past,0.05))
         else:
-            time.sleep(0.1)
+            time.sleep(0.2)
 
 def daemon_fan(interval=5.0):
-    log("into daemon")
-    time.sleep(10)
-    raise Exception
     while True:
-        log("daemon weak up")
         last_check=time.time()
         cpufan=read_val("0x2e")
         gpufan=read_val("0x2f")
         if cpufan>45 or gpufan>41:
-            log("overspeed: %d %d"%(cpufan,gpufan))
+            log("overspeed: %d %d"%(cpufan,gpufan),l=2)
         if gpufan<30:
-            boost_flag=1
+            with boost_flag.get_lock():
+                boost_flag.value=1
+        elif gpufan>40:
+            with boost_flag.get_lock():
+                boost_flag.value=0
         time.sleep(interval-(time.time()-last_check))
 
 if __name__=="__main__":
-    p_cpu=Process(target=coolen_device,args=("0x48",8.0,39,42))
-    p_gpu=Process(target=coolen_device,args=("0x1b",4.0,55,55))
-    p_deamon=Process(target=daemon_fan)
-    p_deamon.start()
+    log("start slowen")
+    p_cpu=Process(target=coolen_device,args=("0x48",8.0,39,42),name="p_cpu")
+    p_gpu=Process(target=coolen_device,args=("0xb7",3.8,55,55),name="p_gpu")
     p_cpu.start()
-    #p_gpu.start()
+    p_gpu.start()
+    p_deamon=Process(target=daemon_fan,name="p_deamon")
+    p_deamon.start()
+
+    while_flag=True
+    while while_flag:
+        time.sleep(4.0)
+        for p in [p_cpu,p_gpu,p_deamon]:
+            if not p.is_alive():
+                log("%s is not alive!"%(p.name))
+                while_flag=False
+                break
+
+    for p in [p_cpu,p_gpu,p_deamon]:
+        if p.is_alive():
+            log("terminate %s"%(p.name))
+            p.terminate()
