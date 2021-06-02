@@ -31,10 +31,10 @@ So I set CPU temp to 39 and GPU temp to 45. Under this condition, both fans run 
 
 * Clone the repo.
 * Run the script.
-    * Either run it in terminal, 
+    * either run `omenslow.py` in terminal,
     * or copy the `my-slow.service` file to `/etc/systemd/system/my-slow.service` and run as a service `sudo systemctl start my-slow`.
 Remember to change the path in `my-slow.service`.
-    * If you are a fanatic for bash, `omenslow` is for you. But this bash script is not as flexible as the python one.
+    * or if you are a fanatic for bash, try `omenslow.sh`. But this bash script is not as flexible as the python one.
 
 * Enjoy it!
 
