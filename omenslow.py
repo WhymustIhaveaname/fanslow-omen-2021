@@ -8,7 +8,7 @@ LOGFILE=sys.argv[0].split(".")
 LOGFILE[-1]="log"
 LOGFILE=".".join(LOGFILE)
 
-def log(msg,l=1,end="\n",logfile=LOGFILE,color=None):
+def log(msg,l=1,end="\n",logfile=LOGFILE,color=None,fileonly=False):
     st=traceback.extract_stack()[-2]
     lstr=LOGLEVEL[l]
     now_str="%s %03d"%(time.strftime("%y/%m/%d %H:%M:%S",time.localtime()),math.modf(time.time())[0]*1000)
@@ -24,7 +24,8 @@ def log(msg,l=1,end="\n",logfile=LOGFILE,color=None):
         tempstr="%s %s%s%s%s"%(perfix,color,str(msg),end,color_rst)
     else:
         tempstr="%s %s:\n%s%s"%(perfix,str(msg),traceback.format_exc(limit=5),end)
-    print(tempstr,end="")
+    if not fileonly:
+        print(tempstr,end="")
     if l>=1:
         with open(logfile,"a") as f:
             f.write(tempstr)
@@ -46,8 +47,15 @@ def write_val(addr,val):
 check_pts=(0.6,0.94,1.0) #0.2/3.8=0.053
 boost_flag=Value("i",0)
 
-def coolen_device(addr,interval,t_target,dt_boost):
-    interval_log="%s.interval"%(addr)
+def coolen_device(addr,interval,ck_interval,t_target,dt_boost,log_dt):
+    interval_log=sys.argv[0].split("/")
+    interval_log[-1]="%s.interval"%(addr)
+    interval_log="/".join(interval_log)
+    interval_inf=interval*0.8
+    interval_sup=interval*1.2
+    lr=0.05
+    ct=0
+
     last_check=time.time()
     last_ck_cache=last_check
     check_ct=len(check_pts)
@@ -56,15 +64,21 @@ def coolen_device(addr,interval,t_target,dt_boost):
         if boost_flag.value<=0:
             t_want=t_target
         else:
-            log("found boost_flag set to %d"%(boost_flag.value),l=2)
+            #log("found boost_flag set to %d"%(boost_flag.value),l=2)
             t_want=t_target+boost_flag.value*dt_boost
-            log("t_want: %d"%(t_want))
+            #log("t_want: %d"%(t_want))
 
         t=read_val(addr)
         if t!=t_want:
             last_check=time.time()
-            #log("%s changed to %d, past %.2fs"%(addr,t,last_check-last_ck_cache))
-            #log("%.3f"%(last_check-last_ck_cache),logfile=interval_log,end=", ")
+            ct+=1
+            this_interval=last_check-last_ck_cache
+            if ct>10 and interval_inf<this_interval<interval_sup:
+                interval+=lr*(this_interval-interval)
+                interval_hist="update interval to %.4fs"%(interval)
+            else:
+                interval_hist=""
+            log("%s changed to %d, past %.2fs, %s"%(addr,t,this_interval,interval_hist),logfile=interval_log,fileonly=not log_dt)
             last_ck_cache=last_check
             write_val(addr,t_want)
             check_ct=0
@@ -76,9 +90,10 @@ def coolen_device(addr,interval,t_target,dt_boost):
             time_past=(time.time()-last_check)
             time.sleep(max(this_interval-time_past,0.05))
         else:
-            time.sleep(0.2)
+            time.sleep(ck_interval)
 
-def daemon_fan(interval=5.0):
+def daemon_fan(interval=10.0):
+    log("daemon check interval %ds"%(interval))
     while True:
         last_check=time.time()
         cpufan=read_val("0x2e")
@@ -87,15 +102,16 @@ def daemon_fan(interval=5.0):
         if cpufan>45 or gpufan>41:
             log("overspeed: %d %d"%(cpufan,gpufan))
 
-        if gpufan<35:
+        if gpufan<35 or cpufan<35:
             log("subspeed: %d %d"%(cpufan,gpufan),l=2)
+            cpufan=read_val("0x2e")
             gpufan=read_val("0x2f")
-            if gpufan<30:
+            if gpufan<35 or cpufan<35:
                 with boost_flag.get_lock():
                     boost_flag.value+=1
                 log("change boostflag to %d"%(boost_flag.value),l=2)
             else:
-                log("fake subspeed actually %d"%(gpufan,),l=2)
+                log("fake subspeed, actually %d %d"%(gpufan,cpufan),l=2)
         elif boost_flag.value!=0:
             with boost_flag.get_lock():
                 boost_flag.value=0
@@ -105,8 +121,9 @@ def daemon_fan(interval=5.0):
 
 if __name__=="__main__":
     log("start slowen")
-    p_cpu=Process(target=coolen_device,args=("0x48",8.0,39,2),name="p_cpu")
-    p_gpu=Process(target=coolen_device,args=("0xb7",3.8,45,10),name="p_gpu")
+    # critial temp: 39, 59
+    p_cpu=Process(target=coolen_device,args=("0x48",8.4,0.1,39,4,False),name="p_cpu")
+    p_gpu=Process(target=coolen_device,args=("0xb7",4.2,0.1,45,10,True),name="p_gpu")
     p_cpu.start()
     p_gpu.start()
     p_deamon=Process(target=daemon_fan,name="p_deamon")
