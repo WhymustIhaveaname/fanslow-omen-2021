@@ -46,6 +46,7 @@ def write_val(addr,val):
 
 check_pts=(0.6,0.94,1.0) #0.2/3.8=0.053
 boost_flag=Value("i",0)
+overspeed_ct=Value("i",0)
 
 def coolen_device(addr,interval,ck_interval,t_target,dt_boost,log_dt):
     interval_log=sys.argv[0].split("/")
@@ -53,7 +54,7 @@ def coolen_device(addr,interval,ck_interval,t_target,dt_boost,log_dt):
     interval_log="/".join(interval_log)
     interval_inf=interval*0.8
     interval_sup=interval*1.2
-    lr=0.05
+    lr=0.02
     ct=0
 
     last_check=time.time()
@@ -92,26 +93,40 @@ def coolen_device(addr,interval,ck_interval,t_target,dt_boost,log_dt):
         else:
             time.sleep(ck_interval)
 
-def daemon_fan(interval=10.0):
+def daemon_fan(interval=20.0):
     log("daemon check interval %ds"%(interval))
     while True:
         last_check=time.time()
         cpufan=read_val("0x2e")
         gpufan=read_val("0x2f")
 
-        if cpufan>45 or gpufan>41:
-            log("overspeed: %d %d"%(cpufan,gpufan))
+        if 110>cpufan>45 or 110>gpufan>41:
+            if overspeed_ct.value<6 or overspeed_ct.value%30==0:
+                log("overspeed: %d %d (ct %d)"%(cpufan,gpufan,overspeed_ct.value))
+                t_cpu=read_val("0x48")
+                t_gpu=read_val("0xb7")
+                log("t_cpu,gpu: %d %d"%(t_cpu,t_gpu))
+                with overspeed_ct.get_lock():
+                    overspeed_ct.value+=1
+            elif overspeed_ct.value>180:
+                log("too many overspeed_ct (%d), reboot"%(overspeed_ct.value),l=2)
+                time.sleep(1)
+                os.system("reboot")
+        else:
+            with overspeed_ct.get_lock():
+                overspeed_ct.value=0
 
         if gpufan<35 or cpufan<35:
-            log("subspeed: %d %d"%(cpufan,gpufan),l=2)
             cpufan=read_val("0x2e")
             gpufan=read_val("0x2f")
             if gpufan<35 or cpufan<35:
+                log("subspeed: %d %d"%(cpufan,gpufan),l=2)
                 with boost_flag.get_lock():
                     boost_flag.value+=1
                 log("change boostflag to %d"%(boost_flag.value),l=2)
             else:
-                log("fake subspeed, actually %d %d"%(gpufan,cpufan),l=2)
+                pass
+                #log("fake subspeed, actually %d %d"%(gpufan,cpufan),l=2)
         elif boost_flag.value!=0:
             with boost_flag.get_lock():
                 boost_flag.value=0
@@ -122,8 +137,8 @@ def daemon_fan(interval=10.0):
 if __name__=="__main__":
     log("start slowen")
     # critial temp: 39, 59
-    p_cpu=Process(target=coolen_device,args=("0x48",8.4,0.1,39,4,False),name="p_cpu")
-    p_gpu=Process(target=coolen_device,args=("0xb7",4.2,0.1,45,10,True),name="p_gpu")
+    p_cpu=Process(target=coolen_device,args=("0x48",8.3,0.1,39,4,False),name="p_cpu")
+    p_gpu=Process(target=coolen_device,args=("0xb7",4.1,0.1,55,10,False),name="p_gpu")
     p_cpu.start()
     p_gpu.start()
     p_deamon=Process(target=daemon_fan,name="p_deamon")
@@ -136,7 +151,6 @@ if __name__=="__main__":
             if not p.is_alive():
                 log("%s is not alive!"%(p.name))
                 while_flag=False
-                break
 
     for p in [p_cpu,p_gpu,p_deamon]:
         if p.is_alive():
